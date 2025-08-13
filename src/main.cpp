@@ -103,8 +103,19 @@ private:
         {
             SAFE_RELEASE(capturedTexture);
             SAFE_RELEASE(outputBuffer);
-            LogError("Failed to convert frame");
-            return false;
+            
+            // 对于SRV创建失败这种临时性错误，不退出程序，只是跳过这一帧
+            if (hr == E_INVALIDARG)
+            {
+                // 这通常是临时性问题，如桌面切换、分辨率变化等
+                // 不记录错误，只是静默跳过这一帧
+                return false;
+            }
+            else
+            {
+                LogError("Failed to convert frame");
+                return false;
+            }
         }
 
         // 可选：读取转换后的数据进行验证或保存

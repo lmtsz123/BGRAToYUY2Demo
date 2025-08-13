@@ -174,6 +174,9 @@ HRESULT DXGICapture::CaptureFrame(ID3D11Texture2D** outTexture, UINT& width, UIN
     desc.Usage = D3D11_USAGE_DEFAULT;
     desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
     desc.CPUAccessFlags = 0;
+    
+    // 强制使用BGRA格式，确保与转换器兼容
+    desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
 
     ID3D11Texture2D* outputTexture = nullptr;
     hr = m_device->CreateTexture2D(&desc, nullptr, &outputTexture);

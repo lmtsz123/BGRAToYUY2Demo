@@ -1,5 +1,6 @@
 #pragma once
 #include "Utils.h"
+#include <chrono>
 
 struct ConversionParams
 {
@@ -31,4 +32,7 @@ private:
     ID3D11ComputeShader* m_computeShader;
     ID3D11Buffer* m_constantBuffer;
     bool m_initialized;
+    
+    // 用于控制日志输出频率
+    std::chrono::steady_clock::time_point m_lastLogTime;
 };

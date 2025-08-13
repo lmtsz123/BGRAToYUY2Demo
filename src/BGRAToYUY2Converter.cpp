@@ -9,6 +9,7 @@ BGRAToYUY2Converter::BGRAToYUY2Converter()
     , m_computeShader(nullptr)
     , m_constantBuffer(nullptr)
     , m_initialized(false)
+    , m_lastLogTime(std::chrono::steady_clock::now())
 {
 }
 
@@ -135,15 +136,50 @@ HRESULT BGRAToYUY2Converter::Convert(ID3D11Texture2D* inputTexture, ID3D11Buffer
 
     try
     {
+        // 验证输入纹理的有效性
+        if (!inputTexture)
+        {
+            LogError("Input texture is null");
+            return E_INVALIDARG;
+        }
+
+        // 获取纹理描述以验证格式
+        D3D11_TEXTURE2D_DESC texDesc;
+        inputTexture->GetDesc(&texDesc);
+        
+        // 验证纹理格式和属性 - 支持常见的桌面格式
+        if (texDesc.Format != DXGI_FORMAT_B8G8R8A8_UNORM && 
+            texDesc.Format != DXGI_FORMAT_R8G8B8A8_UNORM &&
+            texDesc.Format != DXGI_FORMAT_B8G8R8A8_UNORM_SRGB &&
+            texDesc.Format != DXGI_FORMAT_R8G8B8A8_UNORM_SRGB)
+        {
+            LogError("Unsupported texture format: " + std::to_string(texDesc.Format) + 
+                    ". Supported formats: BGRA8_UNORM(87), RGBA8_UNORM(28), BGRA8_SRGB(91), RGBA8_SRGB(29)");
+            return E_INVALIDARG;
+        }
+
         // 创建输入纹理的SRV
         ID3D11ShaderResourceView* inputSRV = nullptr;
         D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-        srvDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        
+        // 使用与纹理相同的格式，但转换为非SRGB版本以便计算
+        if (texDesc.Format == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB)
+            srvDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        else if (texDesc.Format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB)
+            srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        else
+            srvDesc.Format = texDesc.Format; // 使用原始格式
+            
         srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
         srvDesc.Texture2D.MipLevels = 1;
 
-        ThrowIfFailed(m_device->CreateShaderResourceView(inputTexture, &srvDesc, &inputSRV),
-                     "Failed to create input SRV");
+        HRESULT srvResult = m_device->CreateShaderResourceView(inputTexture, &srvDesc, &inputSRV);
+        if (FAILED(srvResult))
+        {
+            LogError("Failed to create input SRV. Texture may be in invalid state. HRESULT: 0x" + 
+                    std::to_string(srvResult));
+            return srvResult;
+        }
 
         // 创建输出缓冲区的UAV
         ID3D11UnorderedAccessView* outputUAV = nullptr;
@@ -192,7 +228,15 @@ HRESULT BGRAToYUY2Converter::Convert(ID3D11Texture2D* inputTexture, ID3D11Buffer
         inputSRV->Release();
         outputUAV->Release();
 
-        LogMessage("Conversion completed successfully");
+        // 每10秒输出一次成功日志
+        auto currentTime = std::chrono::steady_clock::now();
+        auto timeDiff = std::chrono::duration_cast<std::chrono::seconds>(currentTime - m_lastLogTime);
+        if (timeDiff.count() >= 10)
+        {
+            LogMessage("Conversion completed successfully");
+            m_lastLogTime = currentTime;
+        }
+        
         return S_OK;
     }
     catch (const std::exception& e)
