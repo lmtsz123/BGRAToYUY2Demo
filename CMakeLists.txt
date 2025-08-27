@@ -17,11 +17,13 @@ set(SOURCES
     src/main.cpp
     src/DXGICapture.cpp
     src/BGRAToYUY2Converter.cpp
+    src/NV12ToRGBAConverter.cpp
 )
 
 set(HEADERS
     src/DXGICapture.h
     src/BGRAToYUY2Converter.h
+    src/NV12ToRGBAConverter.h
     src/Utils.h
 )
 

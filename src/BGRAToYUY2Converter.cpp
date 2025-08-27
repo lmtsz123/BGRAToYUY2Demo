@@ -157,6 +157,44 @@ HRESULT BGRAToYUY2Converter::Convert(ID3D11Texture2D* inputTexture, ID3D11Buffer
                     ". Supported formats: BGRA8_UNORM(87), RGBA8_UNORM(28), BGRA8_SRGB(91), RGBA8_SRGB(29)");
             return E_INVALIDARG;
         }
+        
+        // 验证输入纹理是否有数据（AMD显卡修复验证）
+        D3D11_TEXTURE2D_DESC inputVerifyDesc = {};
+        inputVerifyDesc.Width = texDesc.Width;
+        inputVerifyDesc.Height = texDesc.Height;
+        inputVerifyDesc.MipLevels = 1;
+        inputVerifyDesc.ArraySize = 1;
+        inputVerifyDesc.Format = texDesc.Format;
+        inputVerifyDesc.SampleDesc.Count = 1;
+        inputVerifyDesc.SampleDesc.Quality = 0;
+        inputVerifyDesc.Usage = D3D11_USAGE_STAGING;
+        inputVerifyDesc.BindFlags = 0;
+        inputVerifyDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        inputVerifyDesc.MiscFlags = 0;
+        
+        ID3D11Texture2D* inputVerifyTexture = nullptr;
+        if (SUCCEEDED(m_device->CreateTexture2D(&inputVerifyDesc, nullptr, &inputVerifyTexture)))
+        {
+            m_context->CopyResource(inputVerifyTexture, inputTexture);
+            m_context->Flush();
+            
+            D3D11_MAPPED_SUBRESOURCE inputMapped;
+            if (SUCCEEDED(m_context->Map(inputVerifyTexture, 0, D3D11_MAP_READ, 0, &inputMapped)))
+            {
+                BYTE* inputData = (BYTE*)inputMapped.pData;
+                int inputNonZero = 0;
+                for (int i = 0; i < 400; i += 4)
+                {
+                    if (inputData[i] != 0 || inputData[i+1] != 0 || inputData[i+2] != 0)
+                    {
+                        inputNonZero++;
+                    }
+                }
+                LogMessage("[YUV] Input texture has " + std::to_string(inputNonZero) + "/100 valid pixels");
+                m_context->Unmap(inputVerifyTexture, 0);
+            }
+            inputVerifyTexture->Release();
+        }
 
         // 创建输入纹理的SRV
         ID3D11ShaderResourceView* inputSRV = nullptr;
@@ -184,11 +222,11 @@ HRESULT BGRAToYUY2Converter::Convert(ID3D11Texture2D* inputTexture, ID3D11Buffer
         // 创建输出缓冲区的UAV
         ID3D11UnorderedAccessView* outputUAV = nullptr;
         D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
-        uavDesc.Format = DXGI_FORMAT_R32_TYPELESS;
+        uavDesc.Format = DXGI_FORMAT_R32_TYPELESS;  // 必须使用TYPELESS配合RAW缓冲区
         uavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
         uavDesc.Buffer.FirstElement = 0;
-        uavDesc.Buffer.NumElements = (((width + 1) / 2) * height * 4) / 4; // 32位元素数量
-        uavDesc.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
+        uavDesc.Buffer.NumElements = ((width + 1) / 2) * height; // YUY2像素对数量
+        uavDesc.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;  // 必须使用RAW标志
 
         ThrowIfFailed(m_device->CreateUnorderedAccessView(outputBuffer, &uavDesc, &outputUAV),
                      "Failed to create output UAV");
@@ -213,11 +251,33 @@ HRESULT BGRAToYUY2Converter::Convert(ID3D11Texture2D* inputTexture, ID3D11Buffer
         m_context->CSSetConstantBuffers(0, 1, &m_constantBuffer);
 
         // 计算调度参数
-        UINT dispatchX = (width + 31) / 32;  // 每个线程处理2个像素，16*2=32
+        // 每个线程处理2个水平像素，线程组大小是16x16
+        // 所以每个线程组处理32x16个像素
+        UINT dispatchX = ((width + 1) / 2 + 15) / 16;  // 输出宽度是(width+1)/2，每个线程组16个线程
         UINT dispatchY = (height + 15) / 16;
 
         // 执行Compute Shader
+        LogMessage("[YUV] Converting BGRA to YUY2...");
         m_context->Dispatch(dispatchX, dispatchY, 1);
+        
+        // 强制等待GPU完成
+        m_context->Flush();
+        
+        // 添加GPU同步点
+        D3D11_QUERY_DESC queryDesc = {};
+        queryDesc.Query = D3D11_QUERY_EVENT;
+        ID3D11Query* query = nullptr;
+        if (SUCCEEDED(m_device->CreateQuery(&queryDesc, &query)))
+        {
+            m_context->End(query);
+            BOOL queryData = FALSE;
+            while (m_context->GetData(query, &queryData, sizeof(BOOL), 0) != S_OK)
+            {
+                // 等待GPU完成
+            }
+            query->Release();
+            LogMessage("[YUV] Conversion completed");
+        }
 
         // 清理管线状态
         ID3D11ShaderResourceView* nullSRV = nullptr;
